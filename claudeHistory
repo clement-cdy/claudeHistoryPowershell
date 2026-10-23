@@ -1,0 +1,546 @@
+#!/usr/bin/env python3
+"""claudeHistory — liste toutes les sessions Claude Code du PC.
+
+Usage :
+  claudeHistory                 sélecteur interactif (TUI) : Entrée = reprendre la session
+  claudeHistory select          idem (alias : selectSessions)
+  exportClaudeHistory [fichier] alias de « claudeHistory export »
+  importClaudeHistory [fichier] alias de « claudeHistory import » (sans argument : dernière archive trouvée)
+  claudeHistory export [fichier] exporte toutes les sessions dans une archive .tar.gz
+  claudeHistory import <fichier> importe une archive (sessions déjà présentes ignorées)
+  claudeHistory list            liste toutes les sessions (plus récentes en bas)
+  claudeHistory -n 20           seulement les 20 dernières
+  claudeHistory search motclé   cherche dans tout le contenu des sessions (toi + Claude)
+  claudeHistory -g motclé       filtre (titre, projet, prompts de la session)
+  claudeHistory -p tiktok       filtre sur le dossier projet
+  claudeHistory -s <id>         affiche la conversation d'une session (id partiel accepté)
+  claudeHistory -s <id> -f      idem avec les réponses complètes de Claude
+  claudeHistory -a              inclut les sessions vides (sans prompt)
+  claudeHistory --json          sortie JSON
+"""
+import argparse, glob, io, json, os, re, sys
+from datetime import datetime
+
+ROOTS = sorted(set(
+    glob.glob(os.path.expanduser("~/.claude*/projects"))
+    + glob.glob("/home/*/.claude*/projects")
+    + glob.glob("/root/.claude*/projects")
+    + ([os.path.join(os.environ["CLAUDE_CONFIG_DIR"], "projects")] if os.environ.get("CLAUDE_CONFIG_DIR") else [])
+))
+
+TTY = sys.stdout.isatty()
+def c(code, s): return f"\033[{code}m{s}\033[0m" if TTY else s
+
+
+def prompt_text(d):
+    """Texte d'un vrai prompt utilisateur, sinon None (tool_result, méta, commandes internes)."""
+    if d.get("type") != "user" or d.get("isMeta") or d.get("isSidechain"):
+        return None
+    content = (d.get("message") or {}).get("content")
+    if isinstance(content, list):
+        parts = [b.get("text", "") for b in content if isinstance(b, dict) and b.get("type") == "text"]
+        if not parts:
+            return None
+        content = "\n".join(parts)
+    if not isinstance(content, str):
+        return None
+    t = content.strip()
+    if not t or t.startswith(("<local-command", "<command-message", "<system-reminder", "Caveat:")):
+        return None
+    if t.startswith("<command-name>"):
+        t = t.split("</command-name>")[0].replace("<command-name>", "").strip()
+    return t
+
+
+def assistant_text(d):
+    content = (d.get("message") or {}).get("content")
+    if isinstance(content, list):
+        return "\n".join(b.get("text", "") for b in content if isinstance(b, dict) and b.get("type") == "text").strip()
+    return content.strip() if isinstance(content, str) else ""
+
+
+def ts(s):
+    try:
+        return datetime.fromisoformat(s.replace("Z", "+00:00")).astimezone()
+    except Exception:
+        return None
+
+
+def load_session(path):
+    s = {"id": os.path.basename(path)[:-6], "file": path, "title": None, "cwd": None,
+         "start": None, "end": None, "prompts": [], "replies": [], "branch": None}
+    with open(path, errors="replace") as fh:
+        for line in fh:
+            try:
+                d = json.loads(line)
+            except Exception:
+                continue
+            t = d.get("type")
+            if t == "ai-title":
+                s["title"] = d.get("aiTitle") or s["title"]
+            elif t == "custom-title":
+                s["title"] = d.get("customTitle") or s["title"]
+            elif t == "agent-name" and not s["title"]:
+                s["title"] = d.get("agentName")
+            if d.get("cwd") and not s["cwd"]:
+                s["cwd"] = d["cwd"]
+            if d.get("gitBranch") and not s["branch"]:
+                s["branch"] = d["gitBranch"]
+            when = ts(d["timestamp"]) if isinstance(d.get("timestamp"), str) else None
+            if when:
+                s["start"] = s["start"] or when
+                s["end"] = when
+            p = prompt_text(d)
+            if p:
+                s["prompts"].append(p)
+            elif t == "assistant" and not d.get("isSidechain"):
+                a = assistant_text(d)
+                if a:
+                    s["replies"].append(a)
+    if not s["cwd"]:
+        s["cwd"] = os.path.basename(os.path.dirname(path)).replace("-", "/")
+    if not s["end"]:
+        s["end"] = s["start"] = datetime.fromtimestamp(os.path.getmtime(path)).astimezone()
+    return s
+
+
+CACHE = os.path.expanduser("~/.cache/claudeHistory/index.json")
+
+
+def all_sessions():
+    """Sessions parsées, avec un cache par fichier (invalidé si taille/mtime changent)."""
+    try:
+        with open(CACHE) as fh:
+            cache = json.load(fh)
+    except Exception:
+        cache = {}
+    fresh, out = {}, []
+    for root in ROOTS:
+        for path in glob.glob(os.path.join(glob.escape(root), "*", "*.jsonl")):
+            try:
+                st = os.stat(path)
+                key = f"{st.st_size}:{st.st_mtime_ns}"
+                hit = cache.get(path)
+                if hit and hit["key"] == key:
+                    s = hit["s"]
+                else:
+                    s = load_session(path)
+                    s["start"], s["end"] = s["start"].isoformat(), s["end"].isoformat()
+                fresh[path] = {"key": key, "s": s}
+                s = dict(s, start=datetime.fromisoformat(s["start"]), end=datetime.fromisoformat(s["end"]))
+                out.append(s)
+            except OSError:
+                continue
+    if fresh != cache:
+        try:
+            os.makedirs(os.path.dirname(CACHE), exist_ok=True)
+            with open(CACHE + ".tmp", "w") as fh:
+                json.dump(fresh, fh, ensure_ascii=False)
+            os.replace(CACHE + ".tmp", CACHE)
+        except OSError:
+            pass
+    return out
+
+
+def one_line(t, n):
+    t = " ".join(t.split())
+    return t if len(t) <= n else t[: n - 1] + "…"
+
+
+def resume_line(s):
+    return f"cd {s['cwd']!r} && claude -r {s['id']}"
+
+
+def header(s, home):
+    proj = s["cwd"].replace(home, "~", 1)
+    print(c("2", f"{s['end']:%Y-%m-%d %H:%M}"), c("36", s["id"][:8]), c("1", s["title"] or "(sans titre)"),
+          c("35", proj), c("2", f"({len(s['prompts'])} prompts)"))
+
+
+def snippet(text, kw, width=140):
+    flat = " ".join(text.split())
+    i = flat.lower().find(kw)
+    start = max(0, i - width // 3)
+    out = flat[start:start + width]
+    j = out.lower().find(kw)
+    out = out[:j] + c("1;31", out[j:j + len(kw)]) + out[j + len(kw):]
+    return ("…" if start else "") + out + ("…" if start + width < len(flat) else "")
+
+
+def search(sessions, words):
+    kw = " ".join(words).lower()
+    home = os.path.expanduser("~")
+    hits = []
+    for s in sessions:
+        meta = " ".join([s["title"] or "", s["cwd"]]).lower()
+        found = [("Toi", p) for p in s["prompts"] if kw in p.lower()] + \
+                [("Claude", a) for a in s["replies"] if kw in a.lower()]
+        if found or kw in meta:
+            hits.append((s, found))
+    hits.sort(key=lambda h: h[0]["end"])
+    for s, found in hits:
+        header(s, home)
+        for who, text in found[:3]:
+            print(f"    {c('33' if who == 'Toi' else '32', who + ' :')} {snippet(text, kw)}")
+        if len(found) > 3:
+            print(c("2", f"    … +{len(found) - 3} autre(s) occurrence(s)"))
+        print("    " + c("1;34", "↻ " + resume_line(s)), "\n")
+    print(c("2", f"{len(hits)} session(s) contiennent « {kw} » — relire : claudeHistory -s <id>"))
+
+
+def show(s, full):
+    print(c("1;36", f"Session {s['id']}"), "—", c("1", s["title"] or "(sans titre)"))
+    print(f"  Projet : {s['cwd']}" + (f"  [{s['branch']}]" if s["branch"] else ""))
+    print(f"  Début  : {s['start']:%Y-%m-%d %H:%M}   Fin : {s['end']:%Y-%m-%d %H:%M}")
+    print(f"  Reprendre : {resume_line(s)}\n")
+    with open(s["file"], errors="replace") as fh:
+        for line in fh:
+            try:
+                d = json.loads(line)
+            except Exception:
+                continue
+            when = ts(d["timestamp"]) if isinstance(d.get("timestamp"), str) else None
+            hm = f"{when:%H:%M}" if when else "     "
+            p = prompt_text(d)
+            if p:
+                print(c("1;33", f"[{hm}] Toi :"), p, "\n")
+            elif d.get("type") == "assistant" and not d.get("isSidechain"):
+                a = assistant_text(d)
+                if a:
+                    print(c("1;32", f"[{hm}] Claude :"), a if full else one_line(a, 300), "\n")
+
+
+def encode_dir(cwd):
+    """Nom du dossier projet tel que Claude Code le calcule à partir du cwd."""
+    return re.sub(r"[^A-Za-z0-9]", "-", cwd)
+
+
+def export_history(sessions, dest=None):
+    """Archive .tar.gz : manifest.json + projects/<dossier>/<id>.jsonl (+ sous-agents)."""
+    import tarfile
+    dest = dest or os.path.expanduser(f"~/claude-history-{datetime.now():%Y%m%d-%H%M%S}.tar.gz")
+    manifest = {"home": os.path.expanduser("~"), "exported": datetime.now().astimezone().isoformat(),
+                "sessions": []}
+    with tarfile.open(dest, "w:gz", compresslevel=3) as tar:
+        for s in sessions:
+            folder = os.path.basename(os.path.dirname(s["file"]))
+            tar.add(s["file"], f"projects/{folder}/{s['id']}.jsonl")
+            if os.path.isdir(s["file"][:-6]):
+                tar.add(s["file"][:-6], f"projects/{folder}/{s['id']}")
+            manifest["sessions"].append({"id": s["id"], "cwd": s["cwd"], "folder": folder, "title": s["title"]})
+        data = json.dumps(manifest, ensure_ascii=False, indent=2).encode()
+        info = tarfile.TarInfo("manifest.json")
+        info.size, info.mtime = len(data), int(datetime.now().timestamp())
+        tar.addfile(info, io.BytesIO(data))
+    return dest, len(sessions)
+
+
+def import_history(src):
+    """Restaure une archive dans ~/.claude/projects. Adapte les chemins si le $HOME diffère.
+    Retourne (importées, ignorées car déjà présentes)."""
+    import tarfile
+    root = os.path.join(os.environ.get("CLAUDE_CONFIG_DIR") or os.path.expanduser("~/.claude"), "projects")
+    home = os.path.expanduser("~")
+    done = skipped = 0
+    with tarfile.open(os.path.expanduser(src), "r:gz") as tar:
+        manifest = json.load(tar.extractfile("manifest.json"))
+        old_home = manifest.get("home") or home
+        for m in manifest["sessions"]:
+            sid, folder = m["id"], m["folder"]
+            if not re.fullmatch(r"[0-9a-fA-F-]{8,}", sid) or "/" in folder or folder in ("", ".", ".."):
+                continue
+            cwd = m["cwd"]
+            if old_home != home and (cwd == old_home or cwd.startswith(old_home + "/")):
+                cwd = home + cwd[len(old_home):]
+                folder = encode_dir(cwd)
+            target = os.path.join(root, folder, sid + ".jsonl")
+            if glob.glob(os.path.join(glob.escape(root), "*", glob.escape(sid) + ".jsonl")):
+                skipped += 1
+                continue
+            os.makedirs(os.path.dirname(target), exist_ok=True)
+            prefix = f"projects/{m['folder']}/{sid}"
+            for member in tar.getmembers():
+                if not (member.isfile() and (member.name == prefix + ".jsonl" or member.name.startswith(prefix + "/"))):
+                    continue
+                rel = member.name[len(f"projects/{m['folder']}/"):]
+                if ".." in rel.split("/"):
+                    continue
+                data = tar.extractfile(member).read()
+                if old_home != home and rel.endswith(".jsonl"):
+                    old, new = json.dumps(old_home)[1:-1], json.dumps(home)[1:-1]
+                    data = data.decode("utf-8", "replace").replace(f'"cwd":"{old}', f'"cwd":"{new}').encode()
+                out = os.path.join(root, folder, rel)
+                os.makedirs(os.path.dirname(out), exist_ok=True)
+                with open(out, "wb") as fh:
+                    fh.write(data)
+            done += 1
+    return done, skipped
+
+
+def latest_export():
+    found = glob.glob(os.path.expanduser("~/claude-history-*.tar.gz")) + \
+            glob.glob(os.path.expanduser("~/T*l*chargements/claude-history-*.tar.gz")) + \
+            glob.glob(os.path.expanduser("~/Downloads/claude-history-*.tar.gz"))
+    return max(found, key=os.path.getmtime) if found else ""
+
+
+def wrap(text, width):
+    import textwrap
+    out = []
+    for para in text.splitlines() or [""]:
+        out += textwrap.wrap(para, width) or [""]
+    return out
+
+
+def tui(stdscr, load):
+    import curses
+    curses.curs_set(0)
+    curses.use_default_colors()
+    for i, col in enumerate([curses.COLOR_CYAN, curses.COLOR_MAGENTA, curses.COLOR_YELLOW,
+                             curses.COLOR_GREEN, curses.COLOR_BLUE], 1):
+        curses.init_pair(i, col, -1)
+    home = os.path.expanduser("~")
+    query, sel, top = "", 0, 0
+    sessions, status = load(), ""
+
+    def put(y, x, s, attr=0, w=None):
+        h, W = stdscr.getmaxyx()
+        if 0 <= y < h and x < W:
+            try:
+                stdscr.addnstr(y, x, s, (w or W - x), attr)
+            except curses.error:
+                pass
+
+    def ask(label, default=""):
+        """Saisie d'une ligne en bas de l'écran. Échap = annuler (None)."""
+        text = default
+        curses.curs_set(1)
+        try:
+            while True:
+                h, W = stdscr.getmaxyx()
+                put(h - 1, 0, " " * (W - 1), 0, W - 1)
+                put(h - 1, 0, f" {label} {text}", curses.color_pair(3) | curses.A_BOLD, W - 1)
+                stdscr.refresh()
+                k = stdscr.get_wch()
+                if k in ("\n", "\r", curses.KEY_ENTER):
+                    return text.strip()
+                if k == "\x1b":
+                    return None
+                if k in (curses.KEY_BACKSPACE, "\x7f", "\b"):
+                    text = text[:-1]
+                elif isinstance(k, str) and k.isprintable():
+                    text += k
+        finally:
+            curses.curs_set(0)
+
+    def run(label, fn):
+        nonlocal status
+        h, W = stdscr.getmaxyx()
+        put(h - 1, 0, f" {label}…".ljust(W - 1), curses.color_pair(3) | curses.A_BOLD, W - 1)
+        stdscr.refresh()
+        try:
+            status = fn()
+        except Exception as e:
+            status = f"✗ Erreur : {e}"
+
+    while True:
+        q = query.lower()
+        items = [s for s in sessions if not q or q in (s["title"] or "").lower()
+                 or q in s["cwd"].lower() or any(q in p.lower() for p in s["prompts"])]
+        sel = max(0, min(sel, len(items) - 1))
+        h, W = stdscr.getmaxyx()
+        lw = max(30, W * 45 // 100)
+        rows = h - 4
+        top = min(max(top, sel - rows + 1), sel) if items else 0
+        stdscr.erase()
+        put(0, 0, " Sessions Claude", curses.A_BOLD)
+        put(0, 18, f"({len(items)}/{len(sessions)})  ↑↓ naviguer · Entrée reprendre · tape pour filtrer · Échap quitter",
+            curses.A_DIM)
+        put(1, 0, f" / {query}", curses.color_pair(3) | curses.A_BOLD)
+        for i, s in enumerate(items[top:top + rows]):
+            y, cur = i + 2, top + i == sel
+            base = curses.A_REVERSE if cur else 0
+            put(y, 0, " " * lw, base, lw)
+            put(y, 1, f"{s['end']:%m-%d %H:%M}", base | curses.A_DIM, lw - 1)
+            folder = os.path.basename(s["cwd"].rstrip("/")) or "/"
+            folder = "~" if s["cwd"].rstrip("/") == home else one_line(folder, max(4, (lw - 14) // 3))
+            title = one_line(s["title"] or "(sans titre)", max(1, lw - 16 - len(folder)))
+            put(y, 13, title, base | curses.A_BOLD, lw - 13)
+            put(y, lw - len(folder) - 1, folder, base | curses.color_pair(2), len(folder))
+        for y in range(1, h):
+            put(y, lw, "│", curses.A_DIM, 1)
+        if items:
+            s, x, pw = items[sel], lw + 2, W - lw - 3
+            put(1, x, s["title"] or "(sans titre)", curses.color_pair(1) | curses.A_BOLD, pw)
+            put(3, x, "Dossier : ", curses.A_DIM, pw)
+            put(3, x + 10, s["cwd"].replace(home, "~", 1), curses.color_pair(2) | curses.A_BOLD, pw - 10)
+            if not os.path.isdir(s["cwd"]):
+                put(4, x, "⚠ dossier introuvable", curses.color_pair(3), pw)
+            put(5, x, f"Branche : {s['branch'] or '-'}", curses.A_DIM, pw)
+            put(6, x, f"Période : {s['start']:%Y-%m-%d %H:%M} → {s['end']:%Y-%m-%d %H:%M}", curses.A_DIM, pw)
+            put(7, x, f"Prompts : {len(s['prompts'])}    id : {s['id'][:8]}", curses.A_DIM, pw)
+            put(9, x, "Dernier prompt :", curses.color_pair(3) | curses.A_BOLD, pw)
+            y = 10
+            for line in wrap(s["prompts"][-1] if s["prompts"] else "", pw)[: max(0, h - 13)]:
+                put(y, x, line, 0, pw); y += 1
+            if s["replies"] and y < h - 3:
+                put(y + 1, x, "Dernière réponse :", curses.color_pair(4) | curses.A_BOLD, pw)
+                for line in wrap(s["replies"][-1], pw)[: max(0, h - y - 3)]:
+                    put(y + 2, x, line, curses.A_DIM, pw); y += 1
+        put(h - 1, 0, " " * (W - 1), curses.A_REVERSE, W - 1)
+        put(h - 1, 0, status or " F2 exporter la session · F3 exporter la liste affichée · F5 exportClaudeHistory (tout) · F6 importClaudeHistory",
+            curses.A_REVERSE | (curses.A_BOLD if status else 0), W - 1)
+        stdscr.refresh()
+
+        k = stdscr.get_wch()
+        if k != curses.KEY_RESIZE:
+            status = ""
+        if k in (curses.KEY_F2, curses.KEY_F3, curses.KEY_F5) and (items or k == curses.KEY_F5):
+            chosen = {curses.KEY_F2: items[sel:sel + 1], curses.KEY_F3: items}.get(k) or [
+                s for s in all_sessions()]
+            default = os.path.expanduser(f"~/claude-history-{datetime.now():%Y%m%d-%H%M%S}.tar.gz")
+            dest = ask(f"Exporter {len(chosen)} session(s) vers :", default)
+            if dest:
+                run("Export en cours", lambda: "✓ {1} session(s) exportée(s) → {0}".format(
+                    *export_history(chosen, os.path.expanduser(dest))))
+            continue
+        if k == curses.KEY_F6:
+            src = ask("Importer l'archive :", latest_export())
+            if src:
+                def do_import():
+                    nonlocal sessions
+                    n, skip = import_history(src)
+                    sessions = load()
+                    return f"✓ {n} session(s) importée(s), {skip} déjà présente(s)"
+                run("Import en cours", do_import)
+            continue
+        if k in (curses.KEY_UP,):
+            sel -= 1
+        elif k in (curses.KEY_DOWN,):
+            sel += 1
+        elif k == curses.KEY_PPAGE:
+            sel -= rows
+        elif k == curses.KEY_NPAGE:
+            sel += rows
+        elif k == curses.KEY_HOME:
+            sel = 0
+        elif k == curses.KEY_END:
+            sel = len(items) - 1
+        elif k in ("\n", "\r", curses.KEY_ENTER):
+            if items:
+                return items[sel]
+        elif k == "\x1b":
+            if not query:
+                return None
+            query, sel = "", 0
+        elif k in (curses.KEY_BACKSPACE, "\x7f", "\b"):
+            query, sel = query[:-1], 0
+        elif k == curses.KEY_RESIZE:
+            pass
+        elif isinstance(k, str) and k.isprintable():
+            query, sel = query + k, 0
+
+
+def select():
+    import curses, locale
+    locale.setlocale(locale.LC_ALL, "")
+    os.environ.setdefault("ESCDELAY", "25")
+    load = lambda: sorted((s for s in all_sessions() if s["prompts"]), key=lambda s: s["end"], reverse=True)
+    s = curses.wrapper(tui, load)
+    if not s:
+        return
+    if not os.path.isdir(s["cwd"]):
+        sys.exit(f"Le dossier {s['cwd']} n'existe plus.")
+    print(c("1;34", "↻ " + resume_line(s)))
+    os.chdir(s["cwd"])
+    os.execvp("claude", ["claude", "-r", s["id"]])
+
+
+def main():
+    alias = {"exportClaudeHistory": "export", "importClaudeHistory": "import"}.get(os.path.basename(sys.argv[0]))
+    if alias:
+        sys.argv.insert(1, alias)
+    if os.path.basename(sys.argv[0]) == "selectSessions" or sys.argv[1:2] == ["select"] \
+            or (len(sys.argv) == 1 and sys.stdin.isatty() and sys.stdout.isatty()):
+        select()
+        return
+    if sys.argv[1:2] in (["export"], ["import"]) and len(sys.argv) > 2 and sys.argv[2].startswith("-"):
+        print(__doc__)
+        return
+    if sys.argv[1:2] == ["export"]:
+        print("Export de toutes les sessions…", file=sys.stderr)
+        dest, n = export_history(all_sessions(),
+                                 os.path.expanduser(sys.argv[2]) if len(sys.argv) > 2 else None)
+        print(f"✓ {n} session(s) exportée(s) → {dest}")
+        return
+    if sys.argv[1:2] == ["import"]:
+        src = sys.argv[2] if len(sys.argv) > 2 else latest_export()
+        if not src:
+            sys.exit("Usage : importClaudeHistory <archive.tar.gz>  (aucune archive claude-history-*.tar.gz trouvée)")
+        if not os.path.isfile(os.path.expanduser(src)):
+            sys.exit(f"Archive introuvable : {src}")
+        print(f"Import de {src}…", file=sys.stderr)
+        n, skip = import_history(src)
+        print(f"✓ {n} session(s) importée(s), {skip} déjà présente(s)")
+        return
+    if sys.argv[1:2] == ["list"]:
+        del sys.argv[1]
+    if len(sys.argv) > 1 and sys.argv[1] == "search":
+        if len(sys.argv) < 3:
+            sys.exit("Usage : claudeHistory search <mot clé>")
+        search([s for s in all_sessions() if s["prompts"]], sys.argv[2:])
+        return
+    ap = argparse.ArgumentParser(description="Historique de toutes les sessions Claude Code du PC")
+    ap.add_argument("-n", type=int, help="nombre de sessions (les plus récentes)")
+    ap.add_argument("-g", "--grep", help="filtre texte (titre, projet, prompts)")
+    ap.add_argument("-p", "--project", help="filtre sur le chemin du projet")
+    ap.add_argument("-s", "--show", metavar="ID", help="affiche la conversation d'une session")
+    ap.add_argument("-f", "--full", action="store_true", help="avec -s : réponses complètes")
+    ap.add_argument("-a", "--all", action="store_true", help="inclut les sessions sans prompt")
+    ap.add_argument("--json", action="store_true", help="sortie JSON")
+    a = ap.parse_args()
+
+    sessions = list(all_sessions())
+
+    if a.show:
+        hits = [s for s in sessions if s["id"].startswith(a.show)]
+        if not hits:
+            sys.exit(f"Aucune session ne commence par {a.show}")
+        if len(hits) > 1:
+            sys.exit("Plusieurs sessions correspondent : " + ", ".join(s["id"] for s in hits))
+        show(hits[0], a.full)
+        return
+
+    if not a.all:
+        sessions = [s for s in sessions if s["prompts"]]
+    if a.project:
+        sessions = [s for s in sessions if a.project.lower() in s["cwd"].lower()]
+    if a.grep:
+        g = a.grep.lower()
+        sessions = [s for s in sessions
+                    if g in (s["title"] or "").lower() or g in s["cwd"].lower()
+                    or any(g in p.lower() for p in s["prompts"])]
+    sessions.sort(key=lambda s: s["end"])
+    if a.n:
+        sessions = sessions[-a.n:]
+
+    if a.json:
+        print(json.dumps([{"id": s["id"], "title": s["title"], "project": s["cwd"], "branch": s["branch"],
+                           "start": s["start"].isoformat(), "end": s["end"].isoformat(),
+                           "prompts": s["prompts"]} for s in sessions], ensure_ascii=False, indent=2))
+        return
+
+    home = os.path.expanduser("~")
+    for s in sessions:
+        header(s, home)
+        if s["prompts"]:
+            print("    ↳", one_line(s["prompts"][0], 90))
+        print("    " + c("34", "↻ " + resume_line(s)))
+    print(c("2", f"\n{len(sessions)} session(s) — détail : claudeHistory -s <id>"))
+
+
+if __name__ == "__main__":
+    try:
+        main()
+    except (BrokenPipeError, KeyboardInterrupt):
+        pass
