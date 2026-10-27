@@ -51,6 +51,7 @@ Puis :
 /history postgres              # recherche dans toutes les conversations
 /history show 5927860d         # résumé d'une ancienne session
 /history -p mon-site -n 30
+/history delete 5927860d       # Claude affiche la session et demande confirmation avant de supprimer
 /history export                # import : Claude demande confirmation avant d'écrire
 ```
 
@@ -87,6 +88,7 @@ claudeHistory        # ou : selectSessions
 | **F3** | Exporter la liste affichée (filtre appliqué) |
 | **F5** | Exporter **toutes** les sessions (`exportClaudeHistory`) |
 | **F6** | Importer une archive (`importClaudeHistory`) |
+| **F8** | Supprimer la session sélectionnée (confirmation o/N) |
 | Échap | Vider le filtre, puis quitter |
 
 Pour l'export et l'import, une ligne de saisie propose un chemin : modifiez-le si besoin, Entrée pour valider, Échap pour annuler.
@@ -117,6 +119,7 @@ claudeHistory list -a             # inclut les sessions vides (sans prompt)
 claudeHistory list --json         # sortie JSON
 claudeHistory -s 5927860d         # relire une conversation (début d'id suffisant)
 claudeHistory -s 5927860d -f      # … avec les réponses complètes de Claude
+claudeHistory delete 5927860d     # supprimer une session (confirmation o/N ; --yes pour s'en passer)
 ```
 
 Chaque session affichée se termine par sa commande de reprise `↻ cd … && claude -r …`.

@@ -1,5 +1,5 @@
 {
   "name": "claude-history",
   "description": "Liste, recherche, relit, exporte et importe toutes les sessions Claude Code du PC, depuis Claude (/history).",
-  "version": "1.0.0"
+  "version": "1.1.0"
 }

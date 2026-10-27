@@ -15,6 +15,7 @@ Usage :
   claudeHistory -p tiktok       filtre sur le dossier projet
   claudeHistory -s <id>         affiche la conversation d'une session (id partiel accepté)
   claudeHistory -s <id> -f      idem avec les réponses complètes de Claude
+  claudeHistory delete <id>     supprime une session (confirmation demandée ; --yes pour s'en passer)
   claudeHistory -a              inclut les sessions vides (sans prompt)
   claudeHistory --json          sortie JSON
 """
@@ -231,6 +232,22 @@ def show(s, full):
                     print(c("1;32", f"[{hm}] Claude :"), a if full else one_line(a, 300), "\n")
 
 
+def find_session(sessions, prefix):
+    hits = [s for s in sessions if s["id"].startswith(prefix)]
+    if not hits:
+        sys.exit(f"Aucune session ne commence par {prefix}")
+    if len(hits) > 1:
+        sys.exit("Plusieurs sessions correspondent : " + ", ".join(s["id"] for s in hits))
+    return hits[0]
+
+
+def delete_session(s):
+    """Supprime le .jsonl de la session et le dossier de ses sous-agents."""
+    os.remove(s["file"])
+    if os.path.isdir(s["file"][:-6]):
+        shutil.rmtree(s["file"][:-6])
+
+
 def encode_dir(cwd):
     """Nom du dossier projet tel que Claude Code le calcule à partir du cwd."""
     return re.sub(r"[^A-Za-z0-9]", "-", cwd)
@@ -419,7 +436,7 @@ def tui(stdscr, load):
                 for line in wrap(s["replies"][-1], pw)[: max(0, h - y - 3)]:
                     put(y + 2, x, line, curses.A_DIM, pw); y += 1
         put(h - 1, 0, " " * (W - 1), curses.A_REVERSE, W - 1)
-        put(h - 1, 0, status or " F2 exporter la session · F3 exporter la liste affichée · F5 exportClaudeHistory (tout) · F6 importClaudeHistory",
+        put(h - 1, 0, status or " F2 exporter la session · F3 exporter la liste affichée · F5 exportClaudeHistory (tout) · F6 importClaudeHistory · F8 supprimer",
             curses.A_REVERSE | (curses.A_BOLD if status else 0), W - 1)
         stdscr.refresh()
 
@@ -444,6 +461,17 @@ def tui(stdscr, load):
                     sessions = load()
                     return f"✓ {n} session(s) importée(s), {skip} déjà présente(s)"
                 run("Import en cours", do_import)
+            continue
+        if k == curses.KEY_F8 and items:
+            s = items[sel]
+            ans = ask(f"Supprimer définitivement « {one_line(s['title'] or '(sans titre)', 40)} » ({s['id'][:8]}) ? o/N :")
+            if ans and ans.lower() in ("o", "oui", "y", "yes"):
+                def do_delete():
+                    nonlocal sessions
+                    delete_session(s)
+                    sessions = load()
+                    return f"✓ Session {s['id'][:8]} supprimée"
+                run("Suppression", do_delete)
             continue
         if k in (curses.KEY_UP,):
             sel -= 1
@@ -526,6 +554,25 @@ def main():
         n, skip = import_history(src)
         print(f"✓ {n} session(s) importée(s), {skip} déjà présente(s)")
         return
+    if sys.argv[1:2] == ["delete"]:
+        args = [x for x in sys.argv[2:] if x not in ("-y", "--yes")]
+        if len(args) != 1:
+            sys.exit("Usage : claudeHistory delete <id> [--yes]")
+        s = find_session(all_sessions(), args[0])
+        header(s, os.path.expanduser("~"))
+        if len(args) == len(sys.argv[2:]):  # pas de --yes
+            if not sys.stdin.isatty():
+                sys.exit("Confirmation requise : relancer avec --yes")
+            try:  # sous Windows, NUL passe pour un terminal : EOF = annulation
+                ans = input("Supprimer définitivement cette session ? [o/N] ")
+            except EOFError:
+                ans = ""
+            if ans.strip().lower() not in ("o", "oui", "y", "yes"):
+                print("Annulé.")
+                return
+        delete_session(s)
+        print(f"✓ Session {s['id']} supprimée")
+        return
     if sys.argv[1:2] == ["list"]:
         del sys.argv[1]
     if len(sys.argv) > 1 and sys.argv[1] == "search":
@@ -546,12 +593,7 @@ def main():
     sessions = list(all_sessions())
 
     if a.show:
-        hits = [s for s in sessions if s["id"].startswith(a.show)]
-        if not hits:
-            sys.exit(f"Aucune session ne commence par {a.show}")
-        if len(hits) > 1:
-            sys.exit("Plusieurs sessions correspondent : " + ", ".join(s["id"] for s in hits))
-        show(hits[0], a.full)
+        show(find_session(sessions, a.show), a.full)
         return
 
     if not a.all:
