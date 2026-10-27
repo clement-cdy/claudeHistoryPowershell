@@ -24,6 +24,38 @@ curl -fsSL https://raw.githubusercontent.com/davidnurdin/claudeHistory/main/inst
 
 **Prérequis :** Linux ou macOS, `python3` (aucune dépendance supplémentaire), et Claude Code installé.
 
+### Windows (PowerShell)
+
+```powershell
+irm https://raw.githubusercontent.com/clement-cdy/claudeHistoryPowershell/main/install.ps1 | iex
+```
+
+- Installe `claudeHistory.py` dans `%USERPROFILE%\.local\bin` (ou `$env:CLAUDE_HISTORY_BIN`), avec des lanceurs `.cmd` : `claudeHistory`, `selectSessions`, `exportClaudeHistory`, `importClaudeHistory`.
+- Trouve Python 3 via `py -3`, `python3` ou `python`, et installe `windows-curses` (`pip --user`) pour le sélecteur interactif.
+- Si le dossier n'est pas dans le `PATH`, le script affiche la commande pour l'ajouter.
+- Les lignes de reprise sont en syntaxe PowerShell : `cd 'C:\projets\api'; claude -r <id>`.
+
+## Depuis Claude Code : `/history`
+
+Le dépôt est aussi un plugin Claude Code. Dans Claude :
+
+```
+/plugin marketplace add clement-cdy/claudeHistoryPowershell
+/plugin install claude-history@claude-history
+```
+
+Puis :
+
+```
+/history                       # 15 dernières sessions, tous projets confondus
+/history postgres              # recherche dans toutes les conversations
+/history show 5927860d         # résumé d'une ancienne session
+/history -p mon-site -n 30
+/history export                # import : Claude demande confirmation avant d'écrire
+```
+
+Claude peut aussi l'utiliser de lui-même : « retrouve la session où on a migré la base ». Le plugin embarque le script : aucune installation séparée n'est nécessaire, seulement Python 3. Une session Claude ne pouvant pas basculer vers une autre, la reprise se fait avec la ligne `claude -r <id>` affichée, dans un nouveau terminal.
+
 ## Le sélecteur interactif
 
 ```bash

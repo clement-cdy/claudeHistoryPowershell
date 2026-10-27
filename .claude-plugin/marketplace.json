@@ -1,0 +1,14 @@
+{
+  "name": "claude-history",
+  "owner": {
+    "name": "agent-local"
+  },
+  "plugins": [
+    {
+      "name": "claude-history",
+      "source": "./",
+      "description": "Liste, recherche, relit, exporte et importe toutes les sessions Claude Code du PC, depuis Claude (/history).",
+      "version": "1.0.0"
+    }
+  ]
+}
