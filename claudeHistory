@@ -16,6 +16,7 @@ Usage :
   claudeHistory -s <id>         affiche la conversation d'une session (id partiel accepté)
   claudeHistory -s <id> -f      idem avec les réponses complètes de Claude
   claudeHistory delete <id>     supprime une session (confirmation demandée ; --yes pour s'en passer)
+  claudeHistory rename <id> <titre>  renomme une session (comme /rename)
   claudeHistory -a              inclut les sessions vides (sans prompt)
   claudeHistory --json          sortie JSON
 """
@@ -210,11 +211,8 @@ def search(sessions, words):
     print(c("2", f"{len(hits)} session(s) contiennent « {kw} » — relire : claudeHistory -s <id>"))
 
 
-def show(s, full):
-    print(c("1;36", f"Session {s['id']}"), "—", c("1", s["title"] or "(sans titre)"))
-    print(f"  Projet : {s['cwd']}" + (f"  [{s['branch']}]" if s["branch"] else ""))
-    print(f"  Début  : {s['start']:%Y-%m-%d %H:%M}   Fin : {s['end']:%Y-%m-%d %H:%M}")
-    print(f"  Reprendre : {resume_line(s)}\n")
+def conversation(s):
+    """(heure, auteur, texte) pour chaque prompt et réponse visible de la session."""
     with open(s["file"], encoding="utf-8", errors="replace") as fh:
         for line in fh:
             try:
@@ -225,11 +223,23 @@ def show(s, full):
             hm = f"{when:%H:%M}" if when else "     "
             p = prompt_text(d)
             if p:
-                print(c("1;33", f"[{hm}] Toi :"), p, "\n")
+                yield hm, "Toi", p
             elif d.get("type") == "assistant" and not d.get("isSidechain"):
                 a = assistant_text(d)
                 if a:
-                    print(c("1;32", f"[{hm}] Claude :"), a if full else one_line(a, 300), "\n")
+                    yield hm, "Claude", a
+
+
+def show(s, full):
+    print(c("1;36", f"Session {s['id']}"), "—", c("1", s["title"] or "(sans titre)"))
+    print(f"  Projet : {s['cwd']}" + (f"  [{s['branch']}]" if s["branch"] else ""))
+    print(f"  Début  : {s['start']:%Y-%m-%d %H:%M}   Fin : {s['end']:%Y-%m-%d %H:%M}")
+    print(f"  Reprendre : {resume_line(s)}\n")
+    for hm, who, text in conversation(s):
+        if who == "Toi":
+            print(c("1;33", f"[{hm}] Toi :"), text, "\n")
+        else:
+            print(c("1;32", f"[{hm}] Claude :"), text if full else one_line(text, 300), "\n")
 
 
 def find_session(sessions, prefix):
@@ -246,6 +256,38 @@ def delete_session(s):
     os.remove(s["file"])
     if os.path.isdir(s["file"][:-6]):
         shutil.rmtree(s["file"][:-6])
+
+
+def rename_session(s, title):
+    """Ajoute une entrée custom-title, comme /rename dans Claude Code."""
+    nl = False  # le fichier ne finit pas par un saut de ligne ?
+    with open(s["file"], "rb") as fh:
+        if fh.seek(0, os.SEEK_END):
+            fh.seek(-1, os.SEEK_END)
+            nl = fh.read(1) != b"\n"
+    with open(s["file"], "a", encoding="utf-8", newline="\n") as fh:
+        fh.write(("\n" if nl else "") + json.dumps(
+            {"type": "custom-title", "customTitle": title, "sessionId": s["id"]}, ensure_ascii=False) + "\n")
+
+
+def copy_to_clipboard(text):
+    if WIN:
+        cands, data = [["clip"]], ("﻿" + text).encode("utf-16-le")
+    else:
+        cands, data = [["pbcopy"], ["wl-copy"], ["xclip", "-selection", "clipboard"], ["xsel", "-bi"]], text.encode()
+    for cmd in cands:
+        if shutil.which(cmd[0]):
+            subprocess.run(cmd, input=data, check=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+            return True
+    return False
+
+
+def open_folder(path):
+    if WIN:
+        os.startfile(path)
+    else:
+        subprocess.Popen(["open" if sys.platform == "darwin" else "xdg-open", path],
+                         stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
 
 
 def encode_dir(cwd):
@@ -340,6 +382,17 @@ def wrap(text, width):
     return out
 
 
+KEYS = [("↑↓ PgPréc PgSuiv", "naviguer"), ("texte", "filtrer (titre, dossier, prompts)"),
+        ("Entrée", "reprendre la session"), ("F1", "cette aide"), ("F2", "exporter la session"),
+        ("F3", "exporter la liste affichée"), ("F4", "ouvrir le dossier du projet"),
+        ("F5", "exporter toutes les sessions"), ("F6", "importer une archive"), ("F7", "renommer la session"),
+        ("F8", "supprimer la session"), ("F9", "dupliquer (fork) et reprendre la copie"),
+        ("F10", "lire la conversation"), ("F12", "copier la commande de reprise"),
+        ("Échap", "vider le filtre, puis quitter")]
+FOOTER = (" F1 aide · F10 lire · F7 renommer · F8 supprimer · F9 dupliquer · F4 dossier · F12 copier"
+          " · F2/F3/F5 exporter · F6 importer")
+
+
 def tui(stdscr, load):
     import curses
     curses.curs_set(0)
@@ -391,6 +444,43 @@ def tui(stdscr, load):
         except Exception as e:
             status = f"✗ Erreur : {e}"
 
+    def help_screen():
+        h, W = stdscr.getmaxyx()
+        bw = min(W - 2, 60)
+        x, y0 = max(0, (W - bw) // 2), max(0, (h - len(KEYS) - 4) // 2)
+        for i in range(len(KEYS) + 4):
+            put(y0 + i, x, " " * bw, curses.A_REVERSE, bw)
+        put(y0 + 1, x + 2, "Raccourcis — une touche pour fermer", curses.A_REVERSE | curses.A_BOLD, bw - 4)
+        for i, (key, label) in enumerate(KEYS):
+            put(y0 + 3 + i, x + 2, f"{key:<17} {label}", curses.A_REVERSE, bw - 4)
+        stdscr.refresh()
+        stdscr.get_wch()
+
+    def view(s):
+        """Lecture plein écran de la conversation."""
+        h, W = stdscr.getmaxyx()
+        lines = []
+        for hm, who, text in conversation(s):
+            lines.append((f"[{hm}] {who} :", curses.color_pair(3 if who == "Toi" else 4) | curses.A_BOLD))
+            lines += [(l, 0) for l in wrap(text, max(10, W - 4))] + [("", 0)]
+        pos = 0
+        while True:
+            h, W = stdscr.getmaxyx()
+            rows = h - 2
+            pos = max(0, min(pos, len(lines) - rows))
+            stdscr.erase()
+            put(0, 0, f" {s['title'] or '(sans titre)'}  ({s['id'][:8]})", curses.color_pair(1) | curses.A_BOLD)
+            for i, (text, attr) in enumerate(lines[pos:pos + rows]):
+                put(i + 1, 2, text, attr, W - 3)
+            put(h - 1, 0, f" {min(pos + rows, len(lines))}/{len(lines)} · ↑↓ PgPréc PgSuiv Début Fin · Échap revenir"
+                .ljust(W - 1), curses.A_REVERSE, W - 1)
+            stdscr.refresh()
+            k = stdscr.get_wch()
+            if k in ("\x1b", "q", curses.KEY_F10):
+                return
+            pos += {curses.KEY_UP: -1, curses.KEY_DOWN: 1, curses.KEY_PPAGE: -rows, curses.KEY_NPAGE: rows,
+                    curses.KEY_HOME: -len(lines), curses.KEY_END: len(lines)}.get(k, 0)
+
     while True:
         q = query.lower()
         items = [s for s in sessions if not q or q in (s["title"] or "").lower()
@@ -436,7 +526,7 @@ def tui(stdscr, load):
                 for line in wrap(s["replies"][-1], pw)[: max(0, h - y - 3)]:
                     put(y + 2, x, line, curses.A_DIM, pw); y += 1
         put(h - 1, 0, " " * (W - 1), curses.A_REVERSE, W - 1)
-        put(h - 1, 0, status or " F2 exporter la session · F3 exporter la liste affichée · F5 exportClaudeHistory (tout) · F6 importClaudeHistory · F8 supprimer",
+        put(h - 1, 0, status or FOOTER,
             curses.A_REVERSE | (curses.A_BOLD if status else 0), W - 1)
         stdscr.refresh()
 
@@ -473,6 +563,37 @@ def tui(stdscr, load):
                     return f"✓ Session {s['id'][:8]} supprimée"
                 run("Suppression", do_delete)
             continue
+        if k == curses.KEY_F1:
+            help_screen()
+            continue
+        if k == curses.KEY_F10 and items:
+            view(items[sel])
+            continue
+        if k == curses.KEY_F7 and items:
+            s = items[sel]
+            title = ask("Nouveau titre :", s["title"] or "")
+            if title:
+                def do_rename():
+                    nonlocal sessions
+                    rename_session(s, title)
+                    sessions = load()
+                    return f"✓ Session renommée : {title}"
+                run("Renommage", do_rename)
+            continue
+        if k == curses.KEY_F4 and items:
+            cwd = items[sel]["cwd"]
+            if os.path.isdir(cwd):
+                run("Ouverture", lambda: open_folder(cwd) or f"✓ Dossier ouvert : {cwd}")
+            else:
+                status = f"⚠ Dossier introuvable : {cwd}"
+            continue
+        if k == curses.KEY_F12 and items:
+            line = resume_line(items[sel])
+            run("Copie", lambda: f"✓ Copié : {line}" if copy_to_clipboard(line)
+                else "✗ Aucun outil de presse-papiers (clip, pbcopy, wl-copy, xclip, xsel)")
+            continue
+        if k == curses.KEY_F9 and items:
+            return items[sel], True
         if k in (curses.KEY_UP,):
             sel -= 1
         elif k in (curses.KEY_DOWN,):
@@ -487,7 +608,7 @@ def tui(stdscr, load):
             sel = len(items) - 1
         elif k in ("\n", "\r", curses.KEY_ENTER):
             if items:
-                return items[sel]
+                return items[sel], False
         elif k == "\x1b":
             if not query:
                 return None
@@ -510,20 +631,22 @@ def select():
     locale.setlocale(locale.LC_ALL, "")
     os.environ.setdefault("ESCDELAY", "25")
     load = lambda: sorted((s for s in all_sessions() if s["prompts"]), key=lambda s: s["end"], reverse=True)
-    s = curses.wrapper(tui, load)
-    if not s:
+    picked = curses.wrapper(tui, load)
+    if not picked:
         return
+    s, fork = picked
     if not os.path.isdir(s["cwd"]):
         sys.exit(f"Le dossier {s['cwd']} n'existe plus.")
-    print(c("1;34", "↻ " + resume_line(s)))
+    args = ["-r", s["id"]] + (["--fork-session"] if fork else [])
+    print(c("1;34", "↻ " + resume_line(s) + (" --fork-session" if fork else "")))
     os.chdir(s["cwd"])
     if WIN:
         # Pas de vrai exec sous Windows (la console serait partagée) : on lance claude et on attend.
         exe = shutil.which("claude")
         if not exe:
             sys.exit("claude introuvable dans le PATH.")
-        sys.exit(subprocess.call([exe, "-r", s["id"]]))
-    os.execvp("claude", ["claude", "-r", s["id"]])
+        sys.exit(subprocess.call([exe] + args))
+    os.execvp("claude", ["claude"] + args)
 
 
 def main():
@@ -572,6 +695,13 @@ def main():
                 return
         delete_session(s)
         print(f"✓ Session {s['id']} supprimée")
+        return
+    if sys.argv[1:2] == ["rename"]:
+        if len(sys.argv) < 4:
+            sys.exit("Usage : claudeHistory rename <id> <nouveau titre>")
+        s, title = find_session(all_sessions(), sys.argv[2]), " ".join(sys.argv[3:]).strip()
+        rename_session(s, title)
+        print(f"✓ Session {s['id']} renommée : {title}")
         return
     if sys.argv[1:2] == ["list"]:
         del sys.argv[1]

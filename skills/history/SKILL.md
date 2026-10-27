@@ -1,7 +1,7 @@
 ---
 name: history
 description: Historique de toutes les sessions Claude Code du PC (tous projets confondus) — lister les dernières sessions, chercher un mot dans les conversations passées, relire ou résumer une session, supprimer une session (après confirmation), exporter / importer les sessions. À utiliser quand l'utilisateur tape /history, ou demande de retrouver une ancienne conversation, « la session où on a parlé de X », ou de transférer ses sessions vers un autre PC.
-argument-hint: "[mot clé | show <id> | delete <id> | export [fichier] | import [fichier] | -n 20 | -p projet]"
+argument-hint: "[mot clé | show <id> | rename <id> <titre> | delete <id> | export [fichier] | import [fichier] | -n 20 | -p projet]"
 allowed-tools: Bash, PowerShell
 ---
 
@@ -27,6 +27,7 @@ Arguments reçus : `$ARGUMENTS`
 | `show <id>` (début d'id suffisant) | `claudeHistory -s <id>` ; ajoute `-f` si l'utilisateur veut les réponses complètes |
 | `export [fichier]` | `claudeHistory export [fichier]` |
 | `import [fichier]` | **demande confirmation avant** (écrit dans `~/.claude/projects`), puis `claudeHistory import [fichier]` |
+| `rename <id> <titre>` | `claudeHistory rename <id> <titre>` |
 | `delete <id>` | voir « Suppression » ci-dessous |
 
 ## Suppression

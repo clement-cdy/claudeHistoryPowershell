@@ -71,7 +71,7 @@ claudeHistory        # ou : selectSessions
  10-23 09:58 Migration vers PostgreSQL                         api │ Période : 2026-10-23 10:46 → 11:28
  10-22 21:23 Tests HTTPS avec certificat ignoré            scripts │ Dernier prompt :
  ...                                                               │ ajoute un test pour les montants négatifs…
- F2 exporter la session · F3 exporter la liste affichée · F5 exportClaudeHistory (tout) · F6 importClaudeHistory
+ F1 aide · F10 lire · F7 renommer · F8 supprimer · F9 dupliquer · F4 dossier · F12 copier · F2/F3/F5 exporter · F6 importer
 ```
 
 - **À gauche** : toutes les sessions, des plus récentes aux plus anciennes (date, titre, dossier).
@@ -84,11 +84,17 @@ claudeHistory        # ou : selectSessions
 | *n'importe quel texte* | Filtrer en direct (titre, dossier, prompts) |
 | Retour arrière | Effacer une lettre du filtre |
 | Entrée | Reprendre la session dans son dossier |
+| **F1** | Aide : liste des raccourcis |
 | **F2** | Exporter la session sélectionnée |
 | **F3** | Exporter la liste affichée (filtre appliqué) |
+| **F4** | Ouvrir le dossier du projet (Explorateur / Finder / gestionnaire de fichiers) |
 | **F5** | Exporter **toutes** les sessions (`exportClaudeHistory`) |
 | **F6** | Importer une archive (`importClaudeHistory`) |
+| **F7** | Renommer la session (comme `/rename`) |
 | **F8** | Supprimer la session sélectionnée (confirmation o/N) |
+| **F9** | Dupliquer : reprendre une **copie** de la session (`claude -r <id> --fork-session`), l'originale reste intacte |
+| **F10** | Lire la conversation en plein écran (Échap pour revenir) |
+| **F12** | Copier la commande de reprise dans le presse-papiers |
 | Échap | Vider le filtre, puis quitter |
 
 Pour l'export et l'import, une ligne de saisie propose un chemin : modifiez-le si besoin, Entrée pour valider, Échap pour annuler.
@@ -120,6 +126,7 @@ claudeHistory list --json         # sortie JSON
 claudeHistory -s 5927860d         # relire une conversation (début d'id suffisant)
 claudeHistory -s 5927860d -f      # … avec les réponses complètes de Claude
 claudeHistory delete 5927860d     # supprimer une session (confirmation o/N ; --yes pour s'en passer)
+claudeHistory rename 5927860d Migration Postgres   # renommer une session
 ```
 
 Chaque session affichée se termine par sa commande de reprise `↻ cd … && claude -r …`.
