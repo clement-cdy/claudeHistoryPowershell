@@ -1,7 +1,7 @@
 {
   "name": "claude-history",
   "owner": {
-    "name": "agent-local"
+    "name": "davidnurdin"
   },
   "plugins": [
     {

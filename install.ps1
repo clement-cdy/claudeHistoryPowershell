@@ -1,8 +1,8 @@
 ﻿# Installe claudeHistory et ses commandes associées (version Windows / PowerShell).
-#   irm https://raw.githubusercontent.com/clement-cdy/claudeHistoryPowershell/main/install.ps1 | iex
+#   irm https://raw.githubusercontent.com/davidnurdin/claudeHistory/main/install.ps1 | iex
 $ErrorActionPreference = 'Stop'
 
-$RepoRaw = 'https://raw.githubusercontent.com/clement-cdy/claudeHistoryPowershell/main'
+$RepoRaw = 'https://raw.githubusercontent.com/davidnurdin/claudeHistory/main'
 $BinDir  = if ($env:CLAUDE_HISTORY_BIN) { $env:CLAUDE_HISTORY_BIN } else { Join-Path $HOME '.local\bin' }
 # Les symlinks Unix reposent sur argv[0] : sous Windows, chaque alias devient un .cmd qui passe la sous-commande.
 $Aliases = [ordered]@{ selectSessions = 'select'; exportClaudeHistory = 'export'; importClaudeHistory = 'import' }

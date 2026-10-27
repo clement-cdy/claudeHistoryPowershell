@@ -27,7 +27,7 @@ curl -fsSL https://raw.githubusercontent.com/davidnurdin/claudeHistory/main/inst
 ### Windows (PowerShell)
 
 ```powershell
-irm https://raw.githubusercontent.com/clement-cdy/claudeHistoryPowershell/main/install.ps1 | iex
+irm https://raw.githubusercontent.com/davidnurdin/claudeHistory/main/install.ps1 | iex
 ```
 
 - Installe `claudeHistory.py` dans `%USERPROFILE%\.local\bin` (ou `$env:CLAUDE_HISTORY_BIN`), avec des lanceurs `.cmd` : `claudeHistory`, `selectSessions`, `exportClaudeHistory`, `importClaudeHistory`.
@@ -40,7 +40,7 @@ irm https://raw.githubusercontent.com/clement-cdy/claudeHistoryPowershell/main/i
 Le dépôt est aussi un plugin Claude Code. Dans Claude :
 
 ```
-/plugin marketplace add clement-cdy/claudeHistoryPowershell
+/plugin marketplace add davidnurdin/claudeHistory
 /plugin install claude-history@claude-history
 ```
 
