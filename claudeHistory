@@ -17,7 +17,8 @@ Usage :
   claudeHistory -s <id> -f      idem avec les réponses complètes de Claude
   claudeHistory delete <id>     supprime une session (confirmation demandée ; --yes pour s'en passer)
   claudeHistory rename <id> <titre>  renomme une session (comme /rename)
-  claudeHistory resume <n°|id>  reprend une session (--fork : sur une copie ; --copy : copie la commande)
+  claudeHistory resume <n°|id>  reprend une session (--fork : sur une copie ; --window : dans une nouvelle
+                                fenêtre de terminal ; --copy : copie la commande)
 
   <id> accepte un début d'id, ou le n° [3] affiché par la dernière liste / recherche.
   claudeHistory -a              inclut les sessions vides (sans prompt)
@@ -328,6 +329,33 @@ def copy_to_clipboard(text):
             subprocess.run(cmd, input=data, check=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
             return True
     return False
+
+
+def open_terminal(cwd, args):
+    """Ouvre une nouvelle fenêtre de terminal dans cwd et y lance « claude <args> ».
+    Retourne le nom du terminal utilisé, ou None si aucun n'est disponible."""
+    cmd = " ".join(["claude"] + args)
+    if WIN:
+        ps = ["powershell", "-NoLogo", "-NoExit", "-Command", cmd]  # -NoExit : la fenêtre reste après claude
+        if shutil.which("wt"):
+            subprocess.Popen(["wt", "-w", "new", "-d", cwd] + ps)
+            return "Windows Terminal"
+        subprocess.Popen(ps, cwd=cwd, creationflags=subprocess.CREATE_NEW_CONSOLE)
+        return "PowerShell"
+    if sys.platform == "darwin":
+        import shlex
+        subprocess.Popen(["osascript", "-e", f'tell application "Terminal" to do script "cd {shlex.quote(cwd)} && {cmd}"',
+                          "-e", 'tell application "Terminal" to activate'],
+                         stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        return "Terminal"
+    for term, argv in (("gnome-terminal", ["gnome-terminal", f"--working-directory={cwd}", "--", "claude", *args]),
+                       ("konsole", ["konsole", "--workdir", cwd, "-e", "claude", *args]),
+                       ("x-terminal-emulator", ["x-terminal-emulator", "-e", "claude", *args])):
+        if shutil.which(term):
+            subprocess.Popen(argv, cwd=cwd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+                             start_new_session=True)
+            return term
+    return None
 
 
 def open_folder(path):
@@ -751,9 +779,23 @@ def main():
     if sys.argv[1:2] == ["resume"]:
         args = [x for x in sys.argv[2:] if not x.startswith("--")]
         if len(args) != 1:
-            sys.exit("Usage : claudeHistory resume <n°|id> [--fork] [--copy]")
+            sys.exit("Usage : claudeHistory resume <n°|id> [--fork] [--window] [--copy]")
         s, fork = find_session(all_sessions(), args[0]), "--fork" in sys.argv
-        if sys.stdin.isatty() and sys.stdout.isatty() and "--copy" not in sys.argv:
+        if "--window" in sys.argv:
+            if not os.path.isdir(s["cwd"]):
+                sys.exit(f"Le dossier {s['cwd']} n'existe plus.")
+            try:
+                term = open_terminal(s["cwd"], ["-r", s["id"]] + (["--fork-session"] if fork else []))
+            except Exception:
+                term = None
+            if term:
+                header(s, os.path.expanduser("~"))
+                print(f"✓ Ouverte dans une nouvelle fenêtre ({term}) : {resume_line(s)}"
+                      + (" --fork-session" if fork else ""))
+                return
+            print("✗ Impossible d'ouvrir une fenêtre de terminal : commande copiée à la place.")
+            sys.argv.append("--copy")
+        elif sys.stdin.isatty() and sys.stdout.isatty() and "--copy" not in sys.argv:
             launch(s, fork)
             return
         # Depuis Claude Code (pas de terminal) : on donne la commande exacte, avec l'id complet.

@@ -50,7 +50,7 @@ Puis :
 /history                       # 15 dernières sessions, tous projets confondus
 /history postgres              # recherche dans toutes les conversations
 /history show 3                # résumé de la session n°3 de la liste
-/history resume 3              # copie « /resume <id complet> » dans le presse-papiers : Ctrl+V, Entrée
+/history resume 3              # ouvre la session dans une nouvelle fenêtre de terminal
 /history -p mon-site -n 30
 /history delete 5927860d       # Claude affiche la session et demande confirmation avant de supprimer
 /history export                # import : Claude demande confirmation avant d'écrire
@@ -127,6 +127,7 @@ claudeHistory list --json         # sortie JSON
 claudeHistory -s 5927860d         # relire une conversation (début d'id suffisant)
 claudeHistory -s 5927860d -f      # … avec les réponses complètes de Claude
 claudeHistory resume 3            # reprendre la session n°3 de la dernière liste (--fork : sur une copie)
+claudeHistory resume 3 --window   # … dans une nouvelle fenêtre de terminal (Windows Terminal, Terminal.app, gnome-terminal…)
 claudeHistory delete 5927860d     # supprimer une session (confirmation o/N ; --yes pour s'en passer)
 claudeHistory rename 5927860d Migration Postgres   # renommer une session
 ```
