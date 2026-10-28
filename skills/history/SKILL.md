@@ -32,7 +32,7 @@ Les n° ne valent que pour la **dernière** liste ou recherche lancée : n'en la
 | `-n N`, `-p projet`, `-g motclé`, `-a`, `--json` | `claudeHistory list <arguments tels quels>` |
 | un ou plusieurs mots | `claudeHistory search <mots>` |
 | `show <n°\|id>` | `claudeHistory -s <n°\|id>` ; ajoute `-f` si l'utilisateur veut les réponses complètes |
-| `resume <n°\|id>` | `claudeHistory resume <n°\|id> --copy` (ajoute `--fork` s'il veut une copie) — voir « Reprise » |
+| `resume <n°\|id>` | `claudeHistory resume <n°\|id> --window` (ajoute `--fork` s'il veut une copie) — voir « Reprise » |
 | `export [fichier]` | `claudeHistory export [fichier]` |
 | `import [fichier]` | **demande confirmation avant** (écrit dans `~/.claude/projects`), puis `claudeHistory import [fichier]` |
 | `rename <n°\|id> <titre>` | `claudeHistory rename <n°\|id> <titre>` |
@@ -44,10 +44,12 @@ pertinents ; si rien ne sort, essaie un synonyme avant de conclure.
 ## Reprise
 
 Tu ne peux pas lancer `/resume` toi-même, et `/resume` n'accepte **que l'id complet** (pas un id tronqué).
-`claudeHistory resume <n°|id> --copy` (lancé depuis le dossier courant) trouve l'id complet et copie dans le
-presse-papiers la bonne commande :
-- session du dossier courant : `/resume <id complet>` → dis à l'utilisateur de coller (Ctrl+V) puis Entrée ;
-- autre dossier : la ligne `cd '…'; claude -r <id complet>` à coller dans un nouveau terminal.
+`claudeHistory resume <n°|id> --window` trouve l'id complet et ouvre une **nouvelle fenêtre de terminal** dans le
+dossier du projet, qui lance `claude -r <id complet>` : rien à copier pour l'utilisateur.
+- Refuse si le n° désigne la session courante (deux fenêtres sur la même session se marcheraient dessus).
+- Si l'ouverture échoue, le programme copie la commande dans le presse-papiers à la place (`/resume <id complet>`
+  si même dossier, sinon `cd '…'; claude -r <id complet>`) : dis-le à l'utilisateur (Ctrl+V puis Entrée).
+- Si l'utilisateur préfère explicitement copier-coller : `--copy` au lieu de `--window`.
 Recopie aussi la commande en clair dans ta réponse, avec l'id **complet**.
 
 ## Suppression
