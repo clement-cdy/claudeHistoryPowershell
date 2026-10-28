@@ -49,7 +49,8 @@ Puis :
 ```
 /history                       # 15 dernières sessions, tous projets confondus
 /history postgres              # recherche dans toutes les conversations
-/history show 5927860d         # résumé d'une ancienne session
+/history show 3                # résumé de la session n°3 de la liste
+/history resume 3              # copie « /resume <id complet> » dans le presse-papiers : Ctrl+V, Entrée
 /history -p mon-site -n 30
 /history delete 5927860d       # Claude affiche la session et demande confirmation avant de supprimer
 /history export                # import : Claude demande confirmation avant d'écrire
@@ -125,11 +126,14 @@ claudeHistory list -a             # inclut les sessions vides (sans prompt)
 claudeHistory list --json         # sortie JSON
 claudeHistory -s 5927860d         # relire une conversation (début d'id suffisant)
 claudeHistory -s 5927860d -f      # … avec les réponses complètes de Claude
+claudeHistory resume 3            # reprendre la session n°3 de la dernière liste (--fork : sur une copie)
 claudeHistory delete 5927860d     # supprimer une session (confirmation o/N ; --yes pour s'en passer)
 claudeHistory rename 5927860d Migration Postgres   # renommer une session
 ```
 
 Chaque session affichée se termine par sa commande de reprise `↻ cd … && claude -r …`.
+
+`list` et `search` numérotent les sessions (`[1]` = la plus récente). Ce numéro est accepté partout où un id est attendu (`-s 3`, `resume 3`, `rename 3 …`, `delete 3`), tout comme un début d'id (`5927860d`). Il vaut pour la dernière liste ou recherche affichée.
 
 ## Transférer ses sessions vers un autre PC
 
